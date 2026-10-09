@@ -64,7 +64,8 @@
 //! DE-wide loader are unchanged — free-form specs from cce-designer or a
 //! hand-edited config still load everywhere.
 
-use cce_ui::widget::Owned;
+use cce_ui::context::UiContext;
+use cce_ui::widget::Handle;
 use cce_ui::engine::{Application, AppSender, LogicalPosition, LogicalSize, WindowSettings};
 use cce_ui::layout::RELIEF_PROFILE_IDENTITY_SPEC as IDENTITY_SPEC;
 use cce_ui::scene::layout::Rect;
@@ -286,7 +287,7 @@ impl Shape {
     /// Surface height at run position `t` (in wall widths, 0 at the first wall's
     /// start). Units: 1.0 = one full wall drop DOWN into the material, negative
     /// = up out of it, 0 = the surrounding surface. `None` is air.
-    fn height(self, p: &ProfileKnobs, t: f32) -> Option<f32> {
+    fn height(self, p: &KnobCurve, t: f32) -> Option<f32> {
         // The profile's height curve, clamped to its plateaus.
         let h = |u: f32| -> f32 {
             if u <= 0.0 {
@@ -391,9 +392,9 @@ const GROOVE_FLOOR: f32 = 0.45;
 /// One profile section's shape state: the three knob sliders plus whether
 /// the profile has diverged from the analytic default.
 struct ProfileKnobs {
-    shoulder: Owned<Adapted<Slider>>,
-    base: Owned<Adapted<Slider>>,
-    bias: Owned<Adapted<Slider>>,
+    shoulder: Handle<Adapted<Slider>>,
+    base: Handle<Adapted<Slider>>,
+    bias: Handle<Adapted<Slider>>,
     /// False until a knob moves or config installed a real (non-identity)
     /// profile for this section: the DE renders its analytic profile and
     /// Save writes the identity sentinel.
@@ -414,7 +415,7 @@ impl ProfileKnobs {
     /// midpoints ARE the analytic smoothstep); the roll exposed it (the knob
     /// family is nothing like the superellipse quadrant) — and a Save from
     /// that state would have installed a smoothstep roll DE-wide unasked.
-    fn new(seed: Option<(f32, f32, f32)>, installed: bool) -> Self {
+    fn new(ctx: &mut UiContext, seed: Option<(f32, f32, f32)>, installed: bool) -> Self {
         let (s, b, c) = seed.unwrap_or((0.5, 0.5, 0.5));
         let knob = |v: f32, label: &str| {
             Slider::new()
@@ -423,18 +424,34 @@ impl ProfileKnobs {
                 .with_scroll(true)
         };
         let mut this = Self {
-            shoulder: Owned::new(knob(s, "Shoulder")),
-            base: Owned::new(knob(b, "Base")),
-            bias: Owned::new(knob(c, "Bias")),
+            shoulder: ctx.insert(knob(s, "Shoulder")),
+            base: ctx.insert(knob(b, "Base")),
+            bias: ctx.insert(knob(c, "Bias")),
             custom: installed,
             last_spec: String::new(),
         };
-        this.last_spec = if this.custom { this.spec() } else { IDENTITY_SPEC.to_string() };
+        this.last_spec = if this.custom { this.curve(ctx).spec() } else { IDENTITY_SPEC.to_string() };
         this
     }
 
-    fn values(&self) -> (f32, f32, f32) {
-        (self.shoulder.inner().value(), self.base.inner().value(), self.bias.inner().value())
+    /// The curve the three sliders set, as they stand.
+    fn curve(&self, ui: &UiContext) -> KnobCurve {
+        KnobCurve(ui[self.shoulder].inner().value(), ui[self.base].inner().value(), ui[self.bias].inner().value())
+    }
+
+    fn take_change(&self, ui: &mut UiContext) -> bool {
+        // Bitwise-or on purpose: every slider's flag must drain.
+        ui[self.shoulder].take_change() | ui[self.base].take_change() | ui[self.bias].take_change()
+    }
+}
+
+/// A section's knob triple (shoulder, base, bias), read off its sliders.
+#[derive(Clone, Copy)]
+struct KnobCurve(f32, f32, f32);
+
+impl KnobCurve {
+    fn values(self) -> (f32, f32, f32) {
+        (self.0, self.1, self.2)
     }
 
     /// The section's height curve `h(v)` — the shared `(bevel)` curve family
@@ -459,25 +476,21 @@ impl ProfileKnobs {
         cce_ui::widget::format_ramp_spec(&self.keys(), false)
     }
 
-    fn take_change(&mut self) -> bool {
-        // Bitwise-or on purpose: every slider's flag must drain.
-        self.shoulder.take_change() | self.base.take_change() | self.bias.take_change()
-    }
 }
 
 struct BevelPopup {
     /// Which SHAPE the section shows; the curve it edits follows from it.
-    profile_dropdown: Owned<Adapted<Dropdown>>,
+    profile_dropdown: Handle<Adapted<Dropdown>>,
     /// Which wall of the rect the section is through — see [`Edge`].
-    edge_dropdown: Owned<Adapted<Dropdown>>,
+    edge_dropdown: Handle<Adapted<Dropdown>>,
     /// The carve wall — what `carve_slope` renders on every
     /// recess/boss/ridge in the DE.
     wall: ProfileKnobs,
     /// The plate perimeter roll — `roll_slope`'s descent profile.
     edge: ProfileKnobs,
-    depth_slider: Owned<Adapted<Slider>>,
-    width_slider: Owned<Adapted<Slider>>,
-    height_slider: Owned<Adapted<Slider>>,
+    depth_slider: Handle<Adapted<Slider>>,
+    width_slider: Handle<Adapted<Slider>>,
+    height_slider: Handle<Adapted<Slider>>,
     /// The wall height as the Save target spelled it when this window
     /// opened — value AND unit — or `None` for a config with no height. The
     /// unit Save writes back in (`height_len`); the value is what an
@@ -488,15 +501,15 @@ struct BevelPopup {
     /// strength (`Light` above) — `scene::material::Finish`'s spec /
     /// shininess / curvature. Applied live to the DE finish, or to the pane
     /// rung's bound material when config binds one.
-    spec_slider: Owned<Adapted<Slider>>,
-    shine_slider: Owned<Adapted<Slider>>,
-    curv_slider: Owned<Adapted<Slider>>,
+    spec_slider: Handle<Adapted<Slider>>,
+    shine_slider: Handle<Adapted<Slider>>,
+    curv_slider: Handle<Adapted<Slider>>,
     /// The Frost column: the pane material's recipe — compression,
     /// refraction, blur radius (`scene::material::Frost`). Same live target.
-    comp_slider: Owned<Adapted<Slider>>,
-    refr_slider: Owned<Adapted<Slider>>,
-    radius_slider: Owned<Adapted<Slider>>,
-    save_button: Owned<Adapted<Button>>,
+    comp_slider: Handle<Adapted<Slider>>,
+    refr_slider: Handle<Adapted<Slider>>,
+    radius_slider: Handle<Adapted<Slider>>,
+    save_button: Handle<Adapted<Button>>,
     /// The material the Save target binds its pane rung to, if any — read
     /// from the `--config` file (this process's own config is not the
     /// target's), else this process's binding. `material_frosted` says
@@ -506,7 +519,7 @@ struct BevelPopup {
     material_frosted: bool,
     /// Cancel = discard-and-close: edits are live only in THIS process, so
     /// with nothing persisted, closing IS the discard (same as Escape).
-    cancel_button: Owned<Adapted<Button>>,
+    cancel_button: Handle<Adapted<Button>>,
     /// Set by the cancel click in `drain_widget_changes` (no exit access
     /// there); `handle_mouse_input` turns it into `BevelMsg::Exit`.
     exit_requested: bool,
@@ -539,7 +552,6 @@ struct BevelPopup {
     height: u32,
     scale_factor: f64,
     needs_rebuild: bool,
-    registered: bool,
     status_pos: (f32, f32),
     cut_rect: Rect,
 }
@@ -553,7 +565,7 @@ use cce_ui::widget::parse_bevel_knobs as parse_knobs;
 /// light azimuth. `has_floor` distinguishes the carve (wall meets a floor
 /// inside the material) from the roll (the surface drops to the silhouette
 /// and the material simply ends — air beyond the edge).
-fn draw_section(pc: &mut PaintCtx, rect: Rect, profile: &ProfileKnobs, shape: Shape, edge: Edge) {
+fn draw_section(pc: &mut PaintCtx, rect: Rect, profile: &KnobCurve, custom: bool, shape: Shape, edge: Edge) {
     let has_floor = shape.has_floor();
     let radius = 6.0f32;
     let radii = (radius, radius, radius, radius);
@@ -767,7 +779,6 @@ fn draw_section(pc: &mut PaintCtx, rect: Rect, profile: &ProfileKnobs, shape: Sh
         // hides this — the knob midpoints ARE the analytic smoothstep — but the
         // roll's analytic form is a superellipse quadrant, nothing like the
         // knob family, and there the two differ by ~20 grey levels.
-        let custom = profile.custom;
         let knob_slope = |v: f32| -> f32 {
             let d = 1.0 / 32.0;
             let (a, b) = ((v - d * 0.5).clamp(0.0, 1.0), (v + d * 0.5).clamp(0.0, 1.0));
@@ -1027,14 +1038,14 @@ impl BevelPopup {
     /// through here so layout and paint cannot disagree about it.
     fn active_shape(&self) -> Shape {
         Shape::ALL
-            .get(self.profile_dropdown.selected)
+            .get(self.ui_context[self.profile_dropdown].selected)
             .copied()
             .unwrap_or(Shape::Recess)
     }
 
     /// The wall the section is taken through.
     fn active_edge(&self) -> Edge {
-        Edge::ALL.get(self.edge_dropdown.selected).copied().unwrap_or(Edge::Left)
+        Edge::ALL.get(self.ui_context[self.edge_dropdown].selected).copied().unwrap_or(Edge::Left)
     }
 
     /// The curve the knobs are editing for the selected shape.
@@ -1066,32 +1077,6 @@ impl BevelPopup {
         ]
     }
 
-    /// Register every dispatch root by reference: the registry keeps a pointer to each
-    /// and resolves it only while the widget lives, so register once `self` is at its
-    /// final address (see `display_list`).
-    fn register_roots(&mut self) {
-        let ctx = &mut self.ui_context;
-        ctx.register_host(&mut self.profile_dropdown);
-        ctx.register_host(&mut self.edge_dropdown);
-        ctx.register_host(&mut self.wall.shoulder);
-        ctx.register_host(&mut self.wall.base);
-        ctx.register_host(&mut self.wall.bias);
-        ctx.register_host(&mut self.edge.shoulder);
-        ctx.register_host(&mut self.edge.base);
-        ctx.register_host(&mut self.edge.bias);
-        ctx.register_host(&mut self.depth_slider);
-        ctx.register_host(&mut self.width_slider);
-        ctx.register_host(&mut self.height_slider);
-        ctx.register_host(&mut self.spec_slider);
-        ctx.register_host(&mut self.shine_slider);
-        ctx.register_host(&mut self.curv_slider);
-        ctx.register_host(&mut self.comp_slider);
-        ctx.register_host(&mut self.refr_slider);
-        ctx.register_host(&mut self.radius_slider);
-        ctx.register_host(&mut self.save_button);
-        ctx.register_host(&mut self.cancel_button);
-    }
-
     /// The pane rung's bound material name, when config binds one — the
     /// target the material sliders edit and Save writes; `None` = the DE
     /// keys (`style.surface.relief.*` for the finish, `style.surface.plate.*`
@@ -1105,12 +1090,12 @@ impl BevelPopup {
     /// else the DE keys every unbound rung reads.
     fn apply_material_live(&self) {
         use cce_ui::scene::{FrostDef, MaterialDef};
-        let spec = self.spec_slider.inner().get_scaled_value();
-        let shine = self.shine_slider.inner().get_scaled_value();
-        let curv = self.curv_slider.inner().get_scaled_value();
-        let comp = self.comp_slider.inner().get_scaled_value();
-        let refr = self.refr_slider.inner().get_scaled_value();
-        let radius = self.radius_slider.inner().get_scaled_value();
+        let spec = self.ui_context[self.spec_slider].inner().get_scaled_value();
+        let shine = self.ui_context[self.shine_slider].inner().get_scaled_value();
+        let curv = self.ui_context[self.curv_slider].inner().get_scaled_value();
+        let comp = self.ui_context[self.comp_slider].inner().get_scaled_value();
+        let refr = self.ui_context[self.refr_slider].inner().get_scaled_value();
+        let radius = self.ui_context[self.radius_slider].inner().get_scaled_value();
         match self.material_target.clone() {
             Some(name) => {
                 let mut def: MaterialDef = cce_ui::color::named_material(&name).unwrap_or_default();
@@ -1142,12 +1127,12 @@ impl BevelPopup {
     fn save_material(&self, p: &str) -> bool {
         let f = |v: f32| format!("{v:.3}");
         let w = |key: &str, value: &str| cce_ui::config::write_config_value(p, key, value, "style");
-        let spec = f(self.spec_slider.inner().get_scaled_value());
-        let shine = f(self.shine_slider.inner().get_scaled_value());
-        let curv = f(self.curv_slider.inner().get_scaled_value());
-        let comp = f(self.comp_slider.inner().get_scaled_value());
-        let refr = f(self.refr_slider.inner().get_scaled_value());
-        let radius = f(self.radius_slider.inner().get_scaled_value());
+        let spec = f(self.ui_context[self.spec_slider].inner().get_scaled_value());
+        let shine = f(self.ui_context[self.shine_slider].inner().get_scaled_value());
+        let curv = f(self.ui_context[self.curv_slider].inner().get_scaled_value());
+        let comp = f(self.ui_context[self.comp_slider].inner().get_scaled_value());
+        let refr = f(self.ui_context[self.refr_slider].inner().get_scaled_value());
+        let radius = f(self.ui_context[self.radius_slider].inner().get_scaled_value());
         match self.material_target.clone() {
             Some(name) => {
                 let m = format!("style.surface.material.{name}");
@@ -1189,50 +1174,52 @@ impl BevelPopup {
     /// `take_*` plumbing after any routed dispatch — state-gated, so it does
     /// not matter which propagate call consumed the event.
     fn drain_widget_changes(&mut self) {
-        if self.edge_dropdown.take_change() {
+        if self.ui_context[self.edge_dropdown].take_change() {
             self.needs_rebuild = true;
         }
-        if self.profile_dropdown.take_change() {
+        if self.ui_context[self.profile_dropdown].take_change() {
             // Switch which profile the section shows — re-arrange parks the
             // other set's knobs off-screen.
             self.needs_rebuild = true;
         }
-        if self.wall.take_change() {
+        if self.wall.take_change(&mut self.ui_context) {
             self.wall.custom = true;
-            let keys = self.wall.keys();
+            let curve = self.wall.curve(&self.ui_context);
+            let keys = curve.keys();
             cce_ui::layout::set_bevel_profile_keys(&keys, false);
-            let spec = self.wall.spec();
+            let spec = curve.spec();
             println!("wall {spec}");
             self.wall.last_spec = spec;
             self.needs_rebuild = true;
         }
-        if self.edge.take_change() {
+        if self.edge.take_change(&mut self.ui_context) {
             self.edge.custom = true;
-            let keys = self.edge.keys();
+            let curve = self.edge.curve(&self.ui_context);
+            let keys = curve.keys();
             cce_ui::layout::set_roll_profile_keys(&keys, false);
-            let spec = self.edge.spec();
+            let spec = curve.spec();
             println!("edge {spec}");
             self.edge.last_spec = spec;
             self.needs_rebuild = true;
         }
-        if self.depth_slider.take_change() {
-            let v = self.depth_slider.inner().get_scaled_value();
+        if self.ui_context[self.depth_slider].take_change() {
+            let v = self.ui_context[self.depth_slider].inner().get_scaled_value();
             if let Ok(mut reg) = cce_ui::layout::get_style_registry().write() {
                 reg.set_float("bevel_depth", v);
             }
             println!("depth {v:.3}");
             self.needs_rebuild = true;
         }
-        if self.width_slider.take_change() {
-            let v = self.width_slider.inner().get_scaled_value();
+        if self.ui_context[self.width_slider].take_change() {
+            let v = self.ui_context[self.width_slider].inner().get_scaled_value();
             if let Ok(mut reg) = cce_ui::layout::get_style_registry().write() {
                 reg.set_float("bevel_width", v);
             }
             println!("width {v:.2}");
             self.needs_rebuild = true;
         }
-        if self.height_slider.take_change() {
-            let v = self.height_slider.inner().get_scaled_value();
+        if self.ui_context[self.height_slider].take_change() {
+            let v = self.ui_context[self.height_slider].inner().get_scaled_value();
             // 0 = follow the width (`layout::bevel_height` reads 0 as unset).
             if let Ok(mut reg) = cce_ui::layout::get_style_registry().write() {
                 reg.set_float("bevel_height", v);
@@ -1241,30 +1228,30 @@ impl BevelPopup {
             println!("height {v:.2}px = {:.3}mm ({})", v * m.mm_per_px(), m.source.as_str());
             self.needs_rebuild = true;
         }
-        let material_moved = self.spec_slider.take_change()
-            | self.shine_slider.take_change()
-            | self.curv_slider.take_change()
-            | self.comp_slider.take_change()
-            | self.refr_slider.take_change()
-            | self.radius_slider.take_change();
+        let material_moved = self.ui_context[self.spec_slider].take_change()
+            | self.ui_context[self.shine_slider].take_change()
+            | self.ui_context[self.curv_slider].take_change()
+            | self.ui_context[self.comp_slider].take_change()
+            | self.ui_context[self.refr_slider].take_change()
+            | self.ui_context[self.radius_slider].take_change();
         if material_moved {
             self.apply_material_live();
             println!(
                 "material spec {:.3} shininess {:.1} curvature {:.3} | compression {:.3} refraction {:.3} radius {:.1}",
-                self.spec_slider.inner().get_scaled_value(),
-                self.shine_slider.inner().get_scaled_value(),
-                self.curv_slider.inner().get_scaled_value(),
-                self.comp_slider.inner().get_scaled_value(),
-                self.refr_slider.inner().get_scaled_value(),
-                self.radius_slider.inner().get_scaled_value(),
+                self.ui_context[self.spec_slider].inner().get_scaled_value(),
+                self.ui_context[self.shine_slider].inner().get_scaled_value(),
+                self.ui_context[self.curv_slider].inner().get_scaled_value(),
+                self.ui_context[self.comp_slider].inner().get_scaled_value(),
+                self.ui_context[self.refr_slider].inner().get_scaled_value(),
+                self.ui_context[self.radius_slider].inner().get_scaled_value(),
             );
             self.needs_rebuild = true;
         }
-        if self.save_button.take_click() {
+        if self.ui_context[self.save_button].take_click() {
             self.save_to_config();
             self.needs_rebuild = true;
         }
-        if self.cancel_button.take_click() {
+        if self.ui_context[self.cancel_button].take_click() {
             self.exit_requested = true;
         }
     }
@@ -1277,19 +1264,19 @@ impl BevelPopup {
     fn save_to_config(&mut self) {
         let p = self.config_path.to_string_lossy().into_owned();
         // The sliders' positions, whichever target the material goes to.
-        let knobs_ok = knob_state::save(&self.state_target, self.wall.values(), self.edge.values());
+        let knobs_ok = knob_state::save(&self.state_target, self.wall.curve(&self.ui_context).values(), self.edge.curve(&self.ui_context).values());
         // `--key` mode: the whole material folds into ONE `(relief)` value
         // at that key — width, depth, the wall curve, and the knob triple
         // behind it (so reopening with --key seeds these sliders). The edge
         // section is not part of a feature material; an untouched analytic
         // wall writes no profile at all.
         if let Some(key) = self.target_key.clone() {
-            let h = self.height_slider.inner().get_scaled_value();
+            let h = self.ui_context[self.height_slider].inner().get_scaled_value();
             let spec = cce_ui::relief_spec::ReliefSpec {
-                width: self.width_slider.inner().get_scaled_value(),
+                width: self.ui_context[self.width_slider].inner().get_scaled_value(),
                 height: (h > 0.0).then(|| self.height_len(h)),
-                light: Some(self.depth_slider.inner().get_scaled_value()),
-                knobs: Some(self.wall.values()),
+                light: Some(self.ui_context[self.depth_slider].inner().get_scaled_value()),
+                knobs: Some(self.wall.curve(&self.ui_context).values()),
                 profile: self.wall.custom.then(|| self.wall.last_spec.clone()),
             };
             let ok = knobs_ok
@@ -1308,15 +1295,15 @@ impl BevelPopup {
             };
             return;
         }
-        let depth = format!("{:.3}", self.depth_slider.inner().get_scaled_value());
-        let width = format!("{:.2}", self.width_slider.inner().get_scaled_value());
+        let depth = format!("{:.3}", self.ui_context[self.depth_slider].inner().get_scaled_value());
+        let width = format!("{:.2}", self.ui_context[self.width_slider].inner().get_scaled_value());
         let w = &mut |key: &str, value: &str| {
             cce_ui::config::write_config_value(&p, key, value, "style")
         };
         // The pinned drop is a LENGTH: written in millimetres when the
         // display metric is real (fabrication reads it straight), in logical
         // px when it is only assumed; 0 = follow the width.
-        let h = self.height_slider.inner().get_scaled_value();
+        let h = self.ui_context[self.height_slider].inner().get_scaled_value();
         let height_ok = if h > 0.0 {
             let len = self.height_len(h);
             cce_ui::config::write_config_value_typed(
@@ -1638,48 +1625,50 @@ impl Application for BevelPopup {
                     .map(|f| (f as f32).clamp(0.0, 1.0))
             })
             .unwrap_or_else(cce_ui::color::root_plate_opacity);
+        // The context owns the widgets; the app keeps their handles.
+        let mut ui_context = cce_ui::context::UiContext::new();
         Self {
-            profile_dropdown: Owned::new(Dropdown::new(
+            profile_dropdown: ui_context.insert(Dropdown::new(
                 Shape::ALL.iter().map(|s| s.label().to_string()).collect(),
                 0,
             )
             .with_label("Shape")),
-            edge_dropdown: Owned::new(Dropdown::new(
+            edge_dropdown: ui_context.insert(Dropdown::new(
                 Edge::ALL.iter().map(|e| e.label().to_string()).collect(),
                 0,
             )
             .with_label("Edge")),
-            wall: ProfileKnobs::new(wall_seed, cce_ui::layout::bevel_profile_slopes().is_some()),
-            edge: ProfileKnobs::new(edge_seed, cce_ui::layout::roll_profile_slopes().is_some()),
-            depth_slider: Owned::new(Slider::new()
+            wall: ProfileKnobs::new(&mut ui_context, wall_seed, cce_ui::layout::bevel_profile_slopes().is_some()),
+            edge: ProfileKnobs::new(&mut ui_context, edge_seed, cce_ui::layout::roll_profile_slopes().is_some()),
+            depth_slider: ui_context.insert(Slider::new()
                 .with_label("Light")
                 .with_range(dmin, dmax)
                 .with_value(((depth - dmin) / (dmax - dmin)).clamp(0.0, 1.0))
                 .with_readout(true)
                 .with_decimals(2)
                 .with_scroll(true)),
-            width_slider: Owned::new(Slider::new()
+            width_slider: ui_context.insert(Slider::new()
                 .with_label("Width")
                 .with_range(wmin, wmax)
                 .with_value(((width - wmin) / (wmax - wmin)).clamp(0.0, 1.0))
                 .with_readout(true)
                 .with_decimals(1)
                 .with_scroll(true)),
-            height_slider: Owned::new(Slider::new()
+            height_slider: ui_context.insert(Slider::new()
                 .with_label("Height")
                 .with_range(hmin, hmax)
                 .with_value(((height - hmin) / (hmax - hmin)).clamp(0.0, 1.0))
                 .with_readout(true)
                 .with_decimals(1)
                 .with_scroll(true)),
-            spec_slider: Owned::new(material_slider("Specular", spec0, SPEC_RANGE, 2)),
-            shine_slider: Owned::new(material_slider("Shininess", shine0, SHINE_RANGE, 0)),
-            curv_slider: Owned::new(material_slider("Curvature", curv0, CURV_RANGE, 2)),
-            comp_slider: Owned::new(material_slider("Compression", comp0, COMP_RANGE, 2)),
-            refr_slider: Owned::new(material_slider("Refraction", refr0, REFR_RANGE, 2)),
-            radius_slider: Owned::new(material_slider("Blur radius", radius0, RADIUS_RANGE, 1)),
-            save_button: Owned::new(Button::new(0.0, 0.0, 0.0, 0.0).with_label("Save")),
-            cancel_button: Owned::new(Button::new(0.0, 0.0, 0.0, 0.0).with_label("Cancel")),
+            spec_slider: ui_context.insert(material_slider("Specular", spec0, SPEC_RANGE, 2)),
+            shine_slider: ui_context.insert(material_slider("Shininess", shine0, SHINE_RANGE, 0)),
+            curv_slider: ui_context.insert(material_slider("Curvature", curv0, CURV_RANGE, 2)),
+            comp_slider: ui_context.insert(material_slider("Compression", comp0, COMP_RANGE, 2)),
+            refr_slider: ui_context.insert(material_slider("Refraction", refr0, REFR_RANGE, 2)),
+            radius_slider: ui_context.insert(material_slider("Blur radius", radius0, RADIUS_RANGE, 1)),
+            save_button: ui_context.insert(Button::new(0.0, 0.0, 0.0, 0.0).with_label("Save")),
+            cancel_button: ui_context.insert(Button::new(0.0, 0.0, 0.0, 0.0).with_label("Cancel")),
             material_target,
             material_frosted,
             exit_requested: false,
@@ -1694,12 +1683,11 @@ impl Application for BevelPopup {
             state_target,
             height_seed,
             target_label,
-            ui_context: cce_ui::context::UiContext::new(),
+            ui_context,
             width: 520,
             height: 480,
             scale_factor: 1.0,
             needs_rebuild: true,
-            registered: false,
             status_pos: (0.0, 0.0),
             cut_rect: Rect::ZERO,
         }
@@ -1745,10 +1733,6 @@ impl Application for BevelPopup {
     }
 
     fn display_list(&mut self, size: LogicalSize, scale: f64) -> Option<DisplayList> {
-        if !self.registered {
-            self.registered = true;
-            self.register_roots();
-        }
 
         let size_changed = self.width != size.width as u32
             || self.height != size.height as u32
@@ -1794,15 +1778,15 @@ impl Application for BevelPopup {
                 + GUTTER_B;
             let cut_h = (self.height as f32 - 2.0 * pad - fixed).min(natural).max(90.0);
 
-            let knob_row = |k: &mut ProfileKnobs, x: f32, y: f32| {
-                k.shoulder.set_rect(x, y, w, knob_h);
-                k.base.set_rect(x, y + (knob_h + gap), w, knob_h);
-                k.bias.set_rect(x, y + 2.0 * (knob_h + gap), w, knob_h);
+            let knob_row = |ui: &mut UiContext, k: &ProfileKnobs, x: f32, y: f32| {
+                ui[k.shoulder].set_rect(x, y, w, knob_h);
+                ui[k.base].set_rect(x, y + (knob_h + gap), w, knob_h);
+                ui[k.bias].set_rect(x, y + 2.0 * (knob_h + gap), w, knob_h);
             };
-            let park = |k: &mut ProfileKnobs| {
-                k.shoulder.set_rect(-1000.0, -1000.0, 0.0, 0.0);
-                k.base.set_rect(-1000.0, -1000.0, 0.0, 0.0);
-                k.bias.set_rect(-1000.0, -1000.0, 0.0, 0.0);
+            let park = |ui: &mut UiContext, k: &ProfileKnobs| {
+                ui[k.shoulder].set_rect(-1000.0, -1000.0, 0.0, 0.0);
+                ui[k.base].set_rect(-1000.0, -1000.0, 0.0, 0.0);
+                ui[k.bias].set_rect(-1000.0, -1000.0, 0.0, 0.0);
             };
 
             let mut y = pad;
@@ -1810,8 +1794,8 @@ impl Application for BevelPopup {
             // because the cutaway is what should get the spare height.
             let edge_w = (w * 0.32).max(120.0).min(w * 0.5);
             let shape_w = (w - edge_w - gap).max(140.0);
-            self.profile_dropdown.set_rect(x, y, shape_w, knob_h);
-            self.edge_dropdown.set_rect(x + shape_w + gap, y, edge_w, knob_h);
+            self.ui_context[self.profile_dropdown].set_rect(x, y, shape_w, knob_h);
+            self.ui_context[self.edge_dropdown].set_rect(x + shape_w + gap, y, edge_w, knob_h);
             y += knob_h + gap;
             self.cut_rect = Rect { x, y, width: w, height: cut_h };
             y += cut_h + gap;
@@ -1821,32 +1805,32 @@ impl Application for BevelPopup {
             // from the other, which parks every knob off-screen and looks like
             // the sliders vanished.
             if self.active_curve() == Curve::Wall {
-                knob_row(&mut self.wall, x, y);
-                park(&mut self.edge);
+                knob_row(&mut self.ui_context, &self.wall, x, y);
+                park(&mut self.ui_context, &self.edge);
             } else {
-                knob_row(&mut self.edge, x, y);
-                park(&mut self.wall);
+                knob_row(&mut self.ui_context, &self.edge, x, y);
+                park(&mut self.ui_context, &self.wall);
             }
             y += 3.0 * (knob_h + gap);
-            self.depth_slider.set_rect(x, y, w, knob_h);
+            self.ui_context[self.depth_slider].set_rect(x, y, w, knob_h);
             y += knob_h + gap;
-            self.width_slider.set_rect(x, y, w, knob_h);
+            self.ui_context[self.width_slider].set_rect(x, y, w, knob_h);
             y += knob_h + gap;
-            self.height_slider.set_rect(x, y, w, knob_h);
+            self.ui_context[self.height_slider].set_rect(x, y, w, knob_h);
             y += knob_h + gap;
             // The material columns: Finish left, Frost right, three rows.
             let half = ((w - gap) * 0.5).max(60.0);
             for (l, r) in [
-                (&mut self.spec_slider, &mut self.comp_slider),
-                (&mut self.shine_slider, &mut self.refr_slider),
-                (&mut self.curv_slider, &mut self.radius_slider),
+                (self.spec_slider, self.comp_slider),
+                (self.shine_slider, self.refr_slider),
+                (self.curv_slider, self.radius_slider),
             ] {
-                l.set_rect(x, y, half, knob_h);
-                r.set_rect(x + half + gap, y, half, knob_h);
+                self.ui_context[l].set_rect(x, y, half, knob_h);
+                self.ui_context[r].set_rect(x + half + gap, y, half, knob_h);
                 y += knob_h + gap;
             }
-            self.save_button.set_rect(x, y, 96.0, button_h);
-            self.cancel_button.set_rect(x + 96.0 + 12.0, y, 96.0, button_h);
+            self.ui_context[self.save_button].set_rect(x, y, 96.0, button_h);
+            self.ui_context[self.cancel_button].set_rect(x + 96.0 + 12.0, y, 96.0, button_h);
             y += button_h + 8.0;
             self.status_pos = (x, y);
 
@@ -1861,11 +1845,11 @@ impl Application for BevelPopup {
         // until this list grew: paint, layout, registration and routing were
         // all correct and the thing still did nothing.
         self.ui_context.clear_popovers();
-        if self.profile_dropdown.popover_rect().is_some() {
-            self.ui_context.register_popover(&mut self.profile_dropdown);
+        if self.ui_context[self.profile_dropdown].popover_rect().is_some() {
+            self.ui_context.register_popover_id(self.profile_dropdown.id());
         }
-        if self.edge_dropdown.popover_rect().is_some() {
-            self.ui_context.register_popover(&mut self.edge_dropdown);
+        if self.ui_context[self.edge_dropdown].popover_rect().is_some() {
+            self.ui_context.register_popover_id(self.edge_dropdown.id());
         }
 
         let mut pc = PaintCtx::new();
@@ -1898,39 +1882,39 @@ impl Application for BevelPopup {
         let shape = self.active_shape();
         let wall_active = shape.curve() == Curve::Wall;
         let active = if wall_active { &self.wall } else { &self.edge };
-        draw_section(&mut pc, self.cut_rect, active, shape, self.active_edge());
+        draw_section(&mut pc, self.cut_rect, &active.curve(&self.ui_context), active.custom, shape, self.active_edge());
 
         let knobs = if wall_active { &self.wall } else { &self.edge };
         for s in [
-            &knobs.shoulder,
-            &knobs.base,
-            &knobs.bias,
-            &self.depth_slider,
-            &self.width_slider,
-            &self.height_slider,
-            &self.spec_slider,
-            &self.shine_slider,
-            &self.curv_slider,
-            &self.comp_slider,
-            &self.refr_slider,
-            &self.radius_slider,
+            &self.ui_context[knobs.shoulder],
+            &self.ui_context[knobs.base],
+            &self.ui_context[knobs.bias],
+            &self.ui_context[self.depth_slider],
+            &self.ui_context[self.width_slider],
+            &self.ui_context[self.height_slider],
+            &self.ui_context[self.spec_slider],
+            &self.ui_context[self.shine_slider],
+            &self.ui_context[self.curv_slider],
+            &self.ui_context[self.comp_slider],
+            &self.ui_context[self.refr_slider],
+            &self.ui_context[self.radius_slider],
         ] {
             cce_ui::scene::painter::paint_root_into(&self.ui_context, s, &mut pc);
         }
-        cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.edge_dropdown, &mut pc);
-        cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.profile_dropdown, &mut pc);
-        cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.save_button, &mut pc);
-        cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.cancel_button, &mut pc);
+        cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.ui_context[self.edge_dropdown], &mut pc);
+        cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.ui_context[self.profile_dropdown], &mut pc);
+        cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.ui_context[self.save_button], &mut pc);
+        cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.ui_context[self.cancel_button], &mut pc);
 
         // The selector's popover, drawn into the frame on top of everything
         // below it (its labels carry the popover rect as bounds).
-        if self.profile_dropdown.popover_rect().is_some() {
+        if self.ui_context[self.profile_dropdown].popover_rect().is_some() {
             // PaintCtx is a RenderTarget: the popover draws its real prims (the
             // dropdown's expanded inset-plate surface) with its own bounds.
-            self.profile_dropdown.render_popover(&mut pc);
+            self.ui_context[self.profile_dropdown].render_popover(&mut pc);
         }
-        if self.edge_dropdown.popover_rect().is_some() {
-            self.edge_dropdown.render_popover(&mut pc);
+        if self.ui_context[self.edge_dropdown].popover_rect().is_some() {
+            self.ui_context[self.edge_dropdown].render_popover(&mut pc);
         }
 
         // The shared context menu (slider Copy/Paste), last, on top.

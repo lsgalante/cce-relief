@@ -13,7 +13,7 @@
 //! Architecture mirrors the reference `DemoApp` (`src/main.rs`): display-list
 //! frame, routed events, in-frame popovers.
 
-use cce_ui::widget::Owned;
+use cce_ui::widget::Handle;
 use cce_ui::engine::{Application, AppSender, LogicalPosition, LogicalSize, WindowSettings};
 use cce_ui::scene::layout::Rect;
 use cce_ui::scene::paint::{DisplayList, PaintCtx};
@@ -33,12 +33,12 @@ enum RampMsg {
 }
 
 struct RampPopup {
-    ramp: Owned<Adapted<Ramp>>,
+    ramp: Handle<Adapted<Ramp>>,
     /// Last spec printed to stdout — edits log their curve for copy/paste.
     last_spec: String,
     /// `--key` mode only; parked off-screen in the scratchpad.
-    save_button: Owned<Adapted<Button>>,
-    cancel_button: Owned<Adapted<Button>>,
+    save_button: Handle<Adapted<Button>>,
+    cancel_button: Handle<Adapted<Button>>,
     /// `--key <dotted.key>`: Save writes the spec as a `(ramp)` value at
     /// this key; the curve seeds from it. None = the stdout scratchpad.
     target_key: Option<String>,
@@ -53,22 +53,21 @@ struct RampPopup {
     height: u32,
     scale_factor: f64,
     needs_rebuild: bool,
-    registered: bool,
 }
 
 impl RampPopup {
     fn drain_changes(&mut self) {
-        let spec = self.ramp.inner().spec_string();
+        let spec = self.ui_context[self.ramp].inner().spec_string();
         if spec != self.last_spec {
             println!("{spec}");
             self.last_spec = spec;
             self.needs_rebuild = true;
         }
-        if self.save_button.take_click() {
+        if self.ui_context[self.save_button].take_click() {
             self.save_to_key();
             self.needs_rebuild = true;
         }
-        if self.cancel_button.take_click() {
+        if self.ui_context[self.cancel_button].take_click() {
             // Discard-and-close: nothing persisted without Save.
             self.exit_requested = true;
         }
@@ -78,7 +77,7 @@ impl RampPopup {
     fn save_to_key(&mut self) {
         let Some(key) = self.target_key.clone() else { return };
         let p = self.config_path.to_string_lossy().into_owned();
-        let spec = self.ramp.inner().spec_string();
+        let spec = self.ui_context[self.ramp].inner().spec_string();
         let ok = cce_ui::config::write_config_value_typed(&p, &key, &spec, "style", Some("ramp"));
         self.status = if ok {
             println!("saved {key} -> {p}");
@@ -124,11 +123,13 @@ impl Application for RampPopup {
         }
 
         let last_spec = ramp.inner().spec_string();
+        // The context owns the widgets; the app keeps their handles.
+        let mut ui_context = cce_ui::context::UiContext::new();
         Self {
-            ramp: Owned::new(ramp),
+            ramp: ui_context.insert(ramp),
             last_spec,
-            save_button: Owned::new(Button::new(0.0, 0.0, 0.0, 0.0).with_label("Save")),
-            cancel_button: Owned::new(Button::new(0.0, 0.0, 0.0, 0.0).with_label("Cancel")),
+            save_button: ui_context.insert(Button::new(0.0, 0.0, 0.0, 0.0).with_label("Save")),
+            cancel_button: ui_context.insert(Button::new(0.0, 0.0, 0.0, 0.0).with_label("Cancel")),
             status: match &target_key {
                 Some(k) => format!("Edits are live in the curve; Save writes the {k} key."),
                 None => String::new(),
@@ -136,12 +137,11 @@ impl Application for RampPopup {
             target_key,
             config_path,
             exit_requested: false,
-            ui_context: cce_ui::context::UiContext::new(),
+            ui_context,
             width: 540,
             height: 420,
             scale_factor: 1.0,
             needs_rebuild: true,
-            registered: false,
         }
     }
 
@@ -188,12 +188,6 @@ impl Application for RampPopup {
     }
 
     fn display_list(&mut self, size: LogicalSize, scale: f64) -> Option<DisplayList> {
-        if !self.registered {
-            self.registered = true;
-            self.ui_context.register_host(&mut self.ramp);
-            self.ui_context.register_host(&mut self.save_button);
-            self.ui_context.register_host(&mut self.cancel_button);
-        }
 
         let size_changed = self.width != size.width as u32
             || self.height != size.height as u32
@@ -211,7 +205,7 @@ impl Application for RampPopup {
             // reserves a Save/Cancel band under the curve.
             let pad = OVERFLOW_MARGIN + cce_ui::layout::root_plate_padding() / 2.0;
             let band = if self.target_key.is_some() { 56.0 } else { 0.0 };
-            self.ramp.set_rect(
+            self.ui_context[self.ramp].set_rect(
                 pad,
                 pad,
                 (self.width as f32 - 2.0 * pad).max(0.0),
@@ -219,11 +213,11 @@ impl Application for RampPopup {
             );
             if self.target_key.is_some() {
                 let by = self.height as f32 - pad - 30.0;
-                self.save_button.set_rect(pad, by, 96.0, 28.0);
-                self.cancel_button.set_rect(pad + 96.0 + 12.0, by, 96.0, 28.0);
+                self.ui_context[self.save_button].set_rect(pad, by, 96.0, 28.0);
+                self.ui_context[self.cancel_button].set_rect(pad + 96.0 + 12.0, by, 96.0, 28.0);
             } else {
-                self.save_button.set_rect(-1000.0, -1000.0, 1.0, 1.0);
-                self.cancel_button.set_rect(-1000.0, -1000.0, 1.0, 1.0);
+                self.ui_context[self.save_button].set_rect(-1000.0, -1000.0, 1.0, 1.0);
+                self.ui_context[self.cancel_button].set_rect(-1000.0, -1000.0, 1.0, 1.0);
             }
 
             self.needs_rebuild = false;
@@ -231,8 +225,8 @@ impl Application for RampPopup {
         }
 
         self.ui_context.clear_popovers();
-        if self.ramp.popover_rect().is_some() {
-            self.ui_context.register_popover(&mut self.ramp);
+        if self.ui_context[self.ramp].popover_rect().is_some() {
+            self.ui_context.register_popover_id(self.ramp.id());
         }
 
         let mut pc = PaintCtx::new();
@@ -257,10 +251,10 @@ impl Application for RampPopup {
             bevel,
         );
 
-        cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.ramp, &mut pc);
+        cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.ui_context[self.ramp], &mut pc);
         if self.target_key.is_some() {
-            cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.save_button, &mut pc);
-            cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.cancel_button, &mut pc);
+            cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.ui_context[self.save_button], &mut pc);
+            cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.ui_context[self.cancel_button], &mut pc);
             if !self.status.is_empty() {
                 let pad = OVERFLOW_MARGIN + cce_ui::layout::root_plate_padding() / 2.0;
                 pc.text_with(
@@ -276,10 +270,10 @@ impl Application for RampPopup {
         }
 
         // The ramp's field-dropdown popover, drawn into the frame on top.
-        if let Some((px, py, pw, ph)) = self.ramp.popover_rect() {
+        if let Some((px, py, pw, ph)) = self.ui_context[self.ramp].popover_rect() {
             let mut coll = cce_ui::layout::PopoverCollector::new();
-            self.ramp.inner().preset_dropdown.render_popover(&mut coll);
-            self.ramp.inner().line_type_dropdown.render_popover(&mut coll);
+            self.ui_context[self.ramp].inner().preset_dropdown.render_popover(&mut coll);
+            self.ui_context[self.ramp].inner().line_type_dropdown.render_popover(&mut coll);
             for &(c, x, y, qw, qh) in &coll.rects {
                 pc.quad(Rect { x, y, width: qw, height: qh }, c);
             }
