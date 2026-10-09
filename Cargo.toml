@@ -5,7 +5,7 @@ edition = "2021"
 description = "The DE's relief editors: cce-relief (the wall and edge profiles, finish and frost) and cce-ramp (a ramp spec)"
 
 [dependencies]
-cce-ui = { git = "https://github.com/lsgalante/cce-ui.git", rev = "6a1a66b8ea66ea37eb5ad3a286f3e71f26ea73df" }
+cce-ui = { git = "https://github.com/lsgalante/cce-ui.git", rev = "4e46a34d3398941a19c6dc66a368023c13db14d0" }
 kdl = "4.6"
 serde_json = "1.0"
 
