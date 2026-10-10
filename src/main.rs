@@ -1860,7 +1860,7 @@ impl Application for BevelPopup {
         // profile — the popup is its own material sample.
         let mut plate = cce_ui::color::page_low_color();
         plate[3] = self.plate_opacity;
-        let radius = cce_ui::colors::root_plate_corner_radius();
+        let radius = cce_ui::color::root_plate_corner_radius();
         let bevel = cce_ui::layout::bevel_width();
         pc.plate(
             Rect { x: 0.0, y: 0.0, width: w, height: h },

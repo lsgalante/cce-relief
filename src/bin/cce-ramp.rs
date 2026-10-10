@@ -241,7 +241,7 @@ impl Application for RampPopup {
             // Half the DE opacity: this popup reads better mostly-glass.
             plate[3] = cce_ui::color::root_plate_opacity() * 0.5;
         }
-        let radius = cce_ui::colors::root_plate_corner_radius();
+        let radius = cce_ui::color::root_plate_corner_radius();
         let bevel = cce_ui::layout::bevel_width();
         let m = OVERFLOW_MARGIN;
         pc.plate(
