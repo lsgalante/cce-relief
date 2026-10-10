@@ -1899,12 +1899,12 @@ impl Application for BevelPopup {
             &self.ui_context[self.refr_slider],
             &self.ui_context[self.radius_slider],
         ] {
-            cce_ui::scene::painter::paint_root_into(&self.ui_context, s, &mut pc);
+            cce_ui::widget::painter::paint_root_into(&self.ui_context, s, &mut pc);
         }
-        cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.ui_context[self.edge_dropdown], &mut pc);
-        cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.ui_context[self.profile_dropdown], &mut pc);
-        cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.ui_context[self.save_button], &mut pc);
-        cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.ui_context[self.cancel_button], &mut pc);
+        cce_ui::widget::painter::paint_root_into(&self.ui_context, &self.ui_context[self.edge_dropdown], &mut pc);
+        cce_ui::widget::painter::paint_root_into(&self.ui_context, &self.ui_context[self.profile_dropdown], &mut pc);
+        cce_ui::widget::painter::paint_root_into(&self.ui_context, &self.ui_context[self.save_button], &mut pc);
+        cce_ui::widget::painter::paint_root_into(&self.ui_context, &self.ui_context[self.cancel_button], &mut pc);
 
         // The selector's popover, drawn into the frame on top of everything
         // below it (its labels carry the popover rect as bounds).

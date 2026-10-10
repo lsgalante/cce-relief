@@ -251,10 +251,10 @@ impl Application for RampPopup {
             bevel,
         );
 
-        cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.ui_context[self.ramp], &mut pc);
+        cce_ui::widget::painter::paint_root_into(&self.ui_context, &self.ui_context[self.ramp], &mut pc);
         if self.target_key.is_some() {
-            cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.ui_context[self.save_button], &mut pc);
-            cce_ui::scene::painter::paint_root_into(&self.ui_context, &self.ui_context[self.cancel_button], &mut pc);
+            cce_ui::widget::painter::paint_root_into(&self.ui_context, &self.ui_context[self.save_button], &mut pc);
+            cce_ui::widget::painter::paint_root_into(&self.ui_context, &self.ui_context[self.cancel_button], &mut pc);
             if !self.status.is_empty() {
                 let pad = OVERFLOW_MARGIN + cce_ui::layout::root_plate_padding() / 2.0;
                 pc.text_with(
