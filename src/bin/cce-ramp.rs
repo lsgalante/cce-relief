@@ -271,7 +271,7 @@ impl Application for RampPopup {
 
         // The ramp's field-dropdown popover, drawn into the frame on top.
         if let Some((px, py, pw, ph)) = self.ui_context[self.ramp].popover_rect() {
-            let mut coll = cce_ui::layout::PopoverCollector::new();
+            let mut coll = cce_ui::scene::paint::PopoverCollector::new();
             self.ui_context[self.ramp].inner().preset_dropdown.render_popover(&mut coll);
             self.ui_context[self.ramp].inner().line_type_dropdown.render_popover(&mut coll);
             for &(c, x, y, qw, qh) in &coll.rects {
