@@ -278,8 +278,8 @@ impl Application for RampPopup {
             }
         }
 
-        // The ramp's field-dropdown popover, drawn into the frame on top. PaintCtx is a
-        // RenderTarget: the popover draws its real prims (the dropdown's expanded
+        // The ramp's field-dropdown popover, drawn into the frame on top. The
+        // popover paints into the frame's PaintCtx: its real prims (the dropdown's expanded
         // inset-plate surface) with its own bounds, as cce-relief's selectors do. (Until
         // 2026-10-12 it went through a PopoverCollector and came back as flat quads.)
         if self.ui_context[self.ramp].popover_rect().is_some() {

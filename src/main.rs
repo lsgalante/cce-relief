@@ -1927,7 +1927,7 @@ impl Application for BevelPopup {
         // The selector's popover, drawn into the frame on top of everything
         // below it (its labels carry the popover rect as bounds).
         if self.ui_context[self.profile_dropdown].popover_rect().is_some() {
-            // PaintCtx is a RenderTarget: the popover draws its real prims (the
+            // The popover paints into the frame's PaintCtx: its real prims (the
             // dropdown's expanded inset-plate surface) with its own bounds.
             self.ui_context[self.profile_dropdown].render_popover(&mut pc);
         }
