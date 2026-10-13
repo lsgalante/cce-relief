@@ -19,7 +19,7 @@ use cce_ui::scene::layout::Rect;
 use cce_ui::scene::paint::{DisplayList, PaintCtx};
 use cce_ui::widget::{
     Adapted, Button, ElementState, Event, KeyEvent, MouseButton, MouseScrollDelta, Ramp,
-    WidgetHost,
+    WidgetEvent, WidgetHost,
 };
 
 /// Transparent rim between the surface edge and the plate: room for the ramp's
@@ -46,7 +46,7 @@ struct RampPopup {
     /// Status line under the buttons (key mode): what the last save did.
     status: String,
     /// Set by the cancel click in `drain_changes` (no exit access there);
-    /// `handle_mouse_input` turns it into `RampMsg::Exit`.
+    /// `handle_mouse_input` / `handle_key_input` turn it into `RampMsg::Exit`.
     exit_requested: bool,
     ui_context: cce_ui::context::UiContext,
     width: u32,
@@ -56,21 +56,29 @@ struct RampPopup {
 }
 
 impl RampPopup {
-    fn drain_changes(&mut self) {
+    /// After every dispatch path and every tick: log the curve when it moved (the ramp is
+    /// read by value — its spec — not through events), then act on the buttons' clicks
+    /// from the widget sweep (`UiContext::take_events`). Returns whether anything changed.
+    fn drain_changes(&mut self) -> bool {
+        let mut any = false;
         let spec = self.ui_context[self.ramp].inner().spec_string();
         if spec != self.last_spec {
             println!("{spec}");
             self.last_spec = spec;
             self.needs_rebuild = true;
+            any = true;
         }
-        if self.ui_context[self.save_button].take_click() {
+        let events = self.ui_context.take_events();
+        let clicked = |h: cce_ui::widget::WidgetId| events.iter().any(|(id, ev)| *id == h && *ev == WidgetEvent::Clicked);
+        if clicked(self.save_button.id()) {
             self.save_to_key();
             self.needs_rebuild = true;
         }
-        if self.ui_context[self.cancel_button].take_click() {
+        if clicked(self.cancel_button.id()) {
             // Discard-and-close: nothing persisted without Save.
             self.exit_requested = true;
         }
+        any || !events.is_empty()
     }
 
     /// Persist the current curve as a `(ramp)` value at the target key.
@@ -179,9 +187,10 @@ impl Application for RampPopup {
     }
 
     fn tick(&mut self, dt: f32, needs_rebuild: &mut bool) {
-        if self.ui_context.tick(dt) {
-            // Tick-driven edits (hover-scroll glide) log their spec too.
-            self.drain_changes();
+        let animated = self.ui_context.tick(dt);
+        // Tick-driven edits (hover-scroll glide) log their spec too; swept every tick, as
+        // every dispatch path is.
+        if self.drain_changes() || animated {
             *needs_rebuild = true;
             self.needs_rebuild = true;
         }
@@ -396,6 +405,9 @@ impl Application for RampPopup {
         let ev = Event::KeyInput(event.clone());
         let handled = self.ui_context.propagate_event(&ev, self.ramp.id());
         self.drain_changes();
+        if self.exit_requested {
+            return Some(RampMsg::Exit);
+        }
         if handled || self.needs_rebuild {
             *needs_rebuild = true;
             self.needs_rebuild = true;

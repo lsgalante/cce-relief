@@ -73,7 +73,7 @@ use cce_ui::scene::paint::{Cap, DisplayList, PaintCtx};
 use cce_ui::scene::relief_shade::{self, CarveMode};
 use cce_ui::widget::{
     Adapted, Button, Dropdown, ElementState, Event, KeyEvent, MouseButton, MouseScrollDelta,
-    Slider, WidgetHost, WidgetId,
+    Slider, WidgetEvent, WidgetHost, WidgetId,
 };
 
 const HEADER_FONT_SIZE: f32 = 13.0;
@@ -439,9 +439,10 @@ impl ProfileKnobs {
         KnobCurve(ui[self.shoulder].inner().value(), ui[self.base].inner().value(), ui[self.bias].inner().value())
     }
 
-    fn take_change(&self, ui: &mut UiContext) -> bool {
-        // Bitwise-or on purpose: every slider's flag must drain.
-        ui[self.shoulder].take_change() | ui[self.base].take_change() | ui[self.bias].take_change()
+    /// Whether `id` is one of the three sliders — a change to any of them is a change to
+    /// the curve (`drain_widget_changes`).
+    fn holds(&self, id: WidgetId) -> bool {
+        [self.shoulder.id(), self.base.id(), self.bias.id()].contains(&id)
     }
 }
 
@@ -1171,18 +1172,37 @@ impl BevelPopup {
         }
     }
 
-    /// `take_*` plumbing after any routed dispatch — state-gated, so it does
-    /// not matter which propagate call consumed the event.
-    fn drain_widget_changes(&mut self) {
-        if self.ui_context[self.edge_dropdown].take_change() {
+    /// Act on what the widgets reported since the last sweep (`UiContext::take_events`),
+    /// run after every dispatch path and every tick. The sweep is collected first and acted
+    /// on in a fixed order (the order the per-handle polls ran in), so it does not matter
+    /// which propagate call consumed the event or in what order the widgets reported.
+    /// Returns whether anything was reported.
+    fn drain_widget_changes(&mut self) -> bool {
+        let events = self.ui_context.take_events();
+        let changed = |h: WidgetId| events.iter().any(|(id, ev)| *id == h && *ev == WidgetEvent::Changed);
+        let clicked = |h: WidgetId| events.iter().any(|(id, ev)| *id == h && *ev == WidgetEvent::Clicked);
+        let wall_moved = events.iter().any(|(id, ev)| *ev == WidgetEvent::Changed && self.wall.holds(*id));
+        let edge_moved = events.iter().any(|(id, ev)| *ev == WidgetEvent::Changed && self.edge.holds(*id));
+        let material_moved = [
+            self.spec_slider.id(),
+            self.shine_slider.id(),
+            self.curv_slider.id(),
+            self.comp_slider.id(),
+            self.refr_slider.id(),
+            self.radius_slider.id(),
+        ]
+        .into_iter()
+        .any(changed);
+
+        if changed(self.edge_dropdown.id()) {
             self.needs_rebuild = true;
         }
-        if self.ui_context[self.profile_dropdown].take_change() {
+        if changed(self.profile_dropdown.id()) {
             // Switch which profile the section shows — re-arrange parks the
             // other set's knobs off-screen.
             self.needs_rebuild = true;
         }
-        if self.wall.take_change(&mut self.ui_context) {
+        if wall_moved {
             self.wall.custom = true;
             let curve = self.wall.curve(&self.ui_context);
             let keys = curve.keys();
@@ -1192,7 +1212,7 @@ impl BevelPopup {
             self.wall.last_spec = spec;
             self.needs_rebuild = true;
         }
-        if self.edge.take_change(&mut self.ui_context) {
+        if edge_moved {
             self.edge.custom = true;
             let curve = self.edge.curve(&self.ui_context);
             let keys = curve.keys();
@@ -1202,7 +1222,7 @@ impl BevelPopup {
             self.edge.last_spec = spec;
             self.needs_rebuild = true;
         }
-        if self.ui_context[self.depth_slider].take_change() {
+        if changed(self.depth_slider.id()) {
             let v = self.ui_context[self.depth_slider].inner().get_scaled_value();
             if let Ok(mut reg) = cce_ui::layout::get_style_registry().write() {
                 reg.set_float("bevel_depth", v);
@@ -1210,7 +1230,7 @@ impl BevelPopup {
             println!("depth {v:.3}");
             self.needs_rebuild = true;
         }
-        if self.ui_context[self.width_slider].take_change() {
+        if changed(self.width_slider.id()) {
             let v = self.ui_context[self.width_slider].inner().get_scaled_value();
             if let Ok(mut reg) = cce_ui::layout::get_style_registry().write() {
                 reg.set_float("bevel_width", v);
@@ -1218,7 +1238,7 @@ impl BevelPopup {
             println!("width {v:.2}");
             self.needs_rebuild = true;
         }
-        if self.ui_context[self.height_slider].take_change() {
+        if changed(self.height_slider.id()) {
             let v = self.ui_context[self.height_slider].inner().get_scaled_value();
             // 0 = follow the width (`layout::bevel_height` reads 0 as unset).
             if let Ok(mut reg) = cce_ui::layout::get_style_registry().write() {
@@ -1228,12 +1248,6 @@ impl BevelPopup {
             println!("height {v:.2}px = {:.3}mm ({})", v * m.mm_per_px(), m.source.as_str());
             self.needs_rebuild = true;
         }
-        let material_moved = self.ui_context[self.spec_slider].take_change()
-            | self.ui_context[self.shine_slider].take_change()
-            | self.ui_context[self.curv_slider].take_change()
-            | self.ui_context[self.comp_slider].take_change()
-            | self.ui_context[self.refr_slider].take_change()
-            | self.ui_context[self.radius_slider].take_change();
         if material_moved {
             self.apply_material_live();
             println!(
@@ -1247,13 +1261,14 @@ impl BevelPopup {
             );
             self.needs_rebuild = true;
         }
-        if self.ui_context[self.save_button].take_click() {
+        if clicked(self.save_button.id()) {
             self.save_to_config();
             self.needs_rebuild = true;
         }
-        if self.ui_context[self.cancel_button].take_click() {
+        if clicked(self.cancel_button.id()) {
             self.exit_requested = true;
         }
+        !events.is_empty()
     }
 
     /// Persist the current material to the shared config
@@ -1725,8 +1740,11 @@ impl Application for BevelPopup {
     }
 
     fn tick(&mut self, dt: f32, needs_rebuild: &mut bool) {
-        if self.ui_context.tick(dt) {
-            self.drain_widget_changes();
+        let animated = self.ui_context.tick(dt);
+        // Swept every tick, not only an animating one: an assistive tool's SetValue on a
+        // slider raises its change flag outside any dispatch, and used to wait for the
+        // next pointer event.
+        if self.drain_widget_changes() || animated {
             *needs_rebuild = true;
             self.needs_rebuild = true;
         }
@@ -2062,6 +2080,11 @@ impl Application for BevelPopup {
             }
         }
         self.drain_widget_changes();
+        // Enter / Space on a focused Cancel (or an assistive tool's press) closes now; it
+        // used to wait for the next mouse press to be noticed.
+        if self.exit_requested {
+            return Some(BevelMsg::Exit);
+        }
         if handled || self.needs_rebuild {
             *needs_rebuild = true;
             self.needs_rebuild = true;
