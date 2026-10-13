@@ -269,23 +269,12 @@ impl Application for RampPopup {
             }
         }
 
-        // The ramp's field-dropdown popover, drawn into the frame on top.
-        if let Some((px, py, pw, ph)) = self.ui_context[self.ramp].popover_rect() {
-            let mut coll = cce_ui::scene::paint::PopoverCollector::new();
-            self.ui_context[self.ramp].inner().preset_dropdown.render_popover(&mut coll);
-            self.ui_context[self.ramp].inner().line_type_dropdown.render_popover(&mut coll);
-            for &(c, x, y, qw, qh) in &coll.rects {
-                pc.quad(Rect { x, y, width: qw, height: qh }, c);
-            }
-            let bounds = Some([px, py, px + pw, py + ph]);
-            for (content, size, tx, ty, color, font, _b) in coll.texts {
-                let color_u8 = [
-                    (color[0] * 255.0).clamp(0.0, 255.0) as u8,
-                    (color[1] * 255.0).clamp(0.0, 255.0) as u8,
-                    (color[2] * 255.0).clamp(0.0, 255.0) as u8,
-                ];
-                pc.text_with(content, tx, ty, size, color_u8, font, bounds);
-            }
+        // The ramp's field-dropdown popover, drawn into the frame on top. PaintCtx is a
+        // RenderTarget: the popover draws its real prims (the dropdown's expanded
+        // inset-plate surface) with its own bounds, as cce-relief's selectors do. (Until
+        // 2026-10-12 it went through a PopoverCollector and came back as flat quads.)
+        if self.ui_context[self.ramp].popover_rect().is_some() {
+            self.ui_context[self.ramp].render_popover(&mut pc);
         }
 
         // The shared context menu (right-click on the graph), drawn last, on
