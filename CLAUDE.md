@@ -9,7 +9,7 @@ shape"), since every app draws it.
 ## Shape
 
 Two binaries, both launched by name by other apps (cce-data-editor's `(bevel)` and
-`(ramp)` previews, cce-grid's line relief), so the names must not change:
+`(ramp)` previews, cce-desktop's line relief), so the names must not change:
 
 - `src/main.rs` — **`cce-relief`**: a relief shape shown as a lit cross-section of the
   edge, shaped by Shoulder / Base / Bias, with the shading strip under it, the Finish
