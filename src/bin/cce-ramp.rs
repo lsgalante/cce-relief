@@ -168,15 +168,21 @@ impl Application for RampPopup {
             }
             None => "Ramp".to_string(),
         };
-        // The key mode adds a Save/Cancel row under the curve.
+        // The key mode adds a Save/Cancel row under the curve. The window is the ramp's
+        // own height (its graph whole over its control strip and key pad) inside the
+        // plate's inset; at its minimum the graph has its 30 px floor.
         let extra = if self.target_key.is_some() { 56 } else { 0 };
+        let pad = OVERFLOW_MARGIN + cce_ui::layout::root_plate_padding() / 2.0;
+        let ramp_h = |h: f32| (h + 2.0 * pad).ceil() as u32;
+        let full = Ramp::expanded_height();
         WindowSettings {
             title,
             app_id: "cce-ramp".to_string(),
             width: 460,
-            height: 340 + extra,
+            height: ramp_h(full) + extra,
             fullscreen: false,
-            min_size: Some((420, 300 + extra)),
+            // The graph's 120 down to its 30 px floor.
+            min_size: Some((420, ramp_h(full - 90.0) + extra)),
         }
     }
 
